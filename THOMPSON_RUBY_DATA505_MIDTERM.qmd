@@ -1,0 +1,234 @@
+---
+title: "Characterizing Automobiles"
+author: "Ruby Thompson"
+date: "03/17/2025"
+
+format: 
+  html: 
+    theme:
+        light: flatly
+        dark: darkly
+    mainfont: monospace
+    highlight-style: github
+    title-block-banner: true
+    embed-resources: true
+---
+
+# Setup
+
+-   Setup
+
+```{r libs}
+sh <- suppressPackageStartupMessages
+sh(library(tidyverse))
+sh(library(caret))
+sh(library(fastDummies))
+sh(library(class))
+sh(library(ISLR)) 
+sh(library(stringr))
+sh(library(moderndive))
+```
+
+# Dataframe
+
+-   We use the `Auto` dataframe.
+
+```{r df}
+head(Auto)
+```
+
+-   It has the following variable names, which describe various attributes of automobiles.
+
+```{r df2}
+names(Auto)
+#view(Auto)
+```
+
+# Multiple Regression
+
+-   Run a linear regression model with `mpg` as the dependent variable and `horsepower` and `year` as features (variables).
+-   Compute and comment on the RMSE.
+
+```{r regression}
+m1 <- lm(mpg ~ horsepower + year, data=Auto)
+get_regression_summaries(m1)
+```
+
+> [TODO]{style="color:red;font-weight:bold"}: **An RSME of 4.37 indicates that the model can accurately predict mpg based off the horsepower and year of a car, within 4.37 units (4.37 mpg). Considering that mpg ranges from 9 to 49.6, having a predictive error of 4.37 is a reasonably precise prediction.**
+
+# Feature Engineering
+
+-   Create 10 features based on the `name` column.
+-   Remove all rows with a missing value.
+-   Ensure only `mpg` and the engineered features remain.
+-   Compute and comment on the RMSE.
+
+```{r features}
+autoMod = Auto %>%
+  mutate(
+    make = word(name, 1), 
+    model = word(name, 2, -1) , 
+    fullName = str_c("19", year, " ", name, sep = ""), 
+    modelNameLength = str_count(name, "\\S+"),  
+    sportyWords = as.integer(str_detect(name, "sport|gt|turbo|convertible")),
+    luxuryWords = as.integer(str_detect(name, "premier|deluxe|custom|special|limited")),
+    type = case_when(
+      str_detect(name, "wagon") ~ "wagon",
+      str_detect(name, "sedan") ~ "sedan",
+      str_detect(name, "convertible") ~ "convertible",
+      TRUE ~ "other"), 
+    coolNumber = ifelse(str_detect(name, "\\d"),1,0), 
+    big3 = ifelse(str_detect(name, "toyota|ford|honda"), "yes", "no"), 
+    boatCar = ifelse(str_detect(name, "(sw)|estate|station|wagon"), "yes", "no"), 
+  ) %>%
+  na.omit() %>%
+  select(mpg, make, model, fullName, modelNameLength, sportyWords, luxuryWords, type, coolNumber, big3, boatCar)
+
+head(autoMod)
+
+m2 <- lm(mpg ~ ., data = autoMod)
+
+get_regression_summaries(m2)
+
+```
+
+> [TODO]{style="color:red;font-weight:bold"}: \* \*An RSME of 0.205 indicates that the model can accurately predict mpg based off our 10 engineered features within 0.205 points. This is a low value and implies that our model has very strong predictive power. However, this is not necessarity the end all be all, and it is important to compare the train vs. test rmse before jumping to any conclusions.\*
+
+# Classification
+
+-   Use either of $K$-NN or Naive Bayes to predict whether an automobile is a `chevrolet` or a `honda`.
+-   Explain your choice of technique.
+-   Report on your Kappa value.
+
+```{r classification}
+chevVhond <- Auto %>%
+  mutate(make = word(name, 1)) %>%
+  filter(make %in% c("chevrolet", "honda")) %>%  
+  mutate(make = as.factor(make)) %>%
+  select(- name, -origin, -cylinders)  
+
+
+set.seed(123)
+split <- createDataPartition(chevVhond$make, p = 0.8, list = FALSE)
+train <- chevVhond[split, ]
+test <- chevVhond[-split, ]
+preproc <- preProcess(train[, -1], method = c("center", "scale"))
+train[, -1] <- predict(preproc, train[, -1])
+test[, -1] <- predict(preproc, test[, -1])
+
+
+
+set.seed(123)
+fit <- train(make ~ ., 
+             data = train, 
+             method = "nb", 
+             metric = "Kappa",  
+             trControl = trainControl(method = "cv", number = 5))
+
+NBresults <- confusionMatrix(predict(fit, test), test$make)
+NBresults
+
+
+```
+
+> [TODO]{style="color:red;font-weight:bold"}: **A Kappa value of 0.7368 indicates that the model is considerably predictive of if a car make is Honda or Chevy, based off all other features. I would conclude that this model is adequately predictive. Furthermore, the reason I chose Naive Bayes is because it handles categorical data better & models the probability of each class well. k-NN relies on numerical distances-- which is not ideal for this scenario.**
+
+# Binary Classification
+
+-   Predict whether a car is a `honda`.
+-   Use model weights.
+-   Display and comment on an ROC curve.
+
+```{r binary classification}
+library(pROC)
+
+set.seed(123)
+split <- createDataPartition(chevVhond$make, p = 0.8, list = FALSE)
+train <- chevVhond[split, ]
+test <- chevVhond[-split, ]
+
+train_weights <- ifelse(train$make == "honda", 
+                        sum(train$make == "chevrolet") / sum(train$make == "honda"), 1)
+
+fit <- glm(make ~ ., 
+           data = train, 
+           family = binomial,
+           weights = train_weights)
+
+
+test$prob <- predict(fit, test, type = "response")
+test$make <- factor(test$make, levels = levels(train$make))
+test$predicted <- ifelse(test$prob > 0.1, "honda", "chevrolet")
+
+
+conf_matrix <- confusionMatrix(factor(test$predicted), factor(test$make))
+print(conf_matrix)
+
+roc_curve <- roc(test$make, test$prob, levels = c("chevrolet", "honda")) 
+plot(roc_curve, col = "blue", main = "ROC Curve for Honda predictions")
+auc(roc_curve)
+
+
+
+```
+
+> [TODO]{style="color:red;font-weight:bold"}: *This ROC curve for Honda predictions shows the model’s ability to distinguish between Honda and Chevrolet. While the curve it close to the top left corner--indicating strong predictive value-- the curve has a stepped appearance, which implies a limited number of distinct probability score. This may be a result from class imbalance or a small data set. While the shape of the curve is concerning, the AUC came out to 0.9357, which does indicate strong classification between makes.*
+
+# Ethics
+
+-   Based on your analysis, comment on the [Clean Air Act of 1970 and Ammendments of 1977](https://www.epa.gov/clean-air-act-overview/evolution-clean-air-act)
+-   Discuss the civic responsibilities of data scientists for:
+    -   Big Data and Human-Centered Computing
+    -   Democratic Institutions
+    -   Climate Change
+-   Provide at least one statistical measure for each, such as a RMSE, Kappa value, or ROC curve.
+
+> [TODO]{style="color:red;font-weight:bold"}: Big Data and Human-Centered Computing *Data scientists working with Big Data and Human-Centered Computing have a responsibility to ensure their models are accurate, unbiased, and beneficial to society. In cases like predicting MPG based on make and model, (where we found an RMSE 1.39) a low RMSE suggests the model is highly accurate in predicting MPG, meaning it could be used in consumer decision-making or policy development. Therefore, data scientists must ensure that such models are validated on diverse data sets and do not mislead consumers into believing predictions are perfect based on small sets such as `Auto`.*
+
+```{r big data}
+bigDataM <- lm(mpg ~ make + model, data=autoMod)
+get_regression_summaries(bigDataM)
+```
+
+> [TODO]{style="color:red;font-weight:bold"}: Democratic Institutions *Data science plays a crucial role in evidence-based policy-making. When analyzing emissions, data scientists help governments set fuel efficiency standards. With that, it is important that the Data Scientist in question is transparent on the correlation of certain factors when delivering data for new policies. For example, new initiative to reward individuals who drive efficient cars are developing. Therefore, a data scientist must be explicit on what actually determines a car to be efficient. Most people would consider weight and horsepower to have an effect on a cars efficiency. However, if you look below you can see that those two factors have slightly better than random correlation to the efficiency of a car. (Kappa = 0.557) This is important information for democratic institutions to have when determining the perimeters for such rewards/incentive programs because it is important the the incetive programs are promoting the correct things. Therefore the data scientist is responsible for properly communicating information as such.*
+
+```{r democracy}
+
+Auto$efficiency <- ifelse(Auto$mpg > 25, "efficient", "inefficient")
+Auto$efficiency <- as.factor(Auto$efficiency)
+
+set.seed(123)
+split <- createDataPartition(Auto$efficiency, p = 0.8, list = FALSE)
+train <- Auto[split, ]
+test <- Auto[-split, ]
+
+demoFit <- train(efficiency ~ weight + horsepower, 
+                       data = train, 
+                       method = "knn", 
+                       tuneLength = 5,
+                       metric = "Kappa",
+                       trControl = trainControl(method = "cv", number = 5))
+
+KNNdemo <- confusionMatrix(predict(demoFit, test), test$efficiency)$overall["Kappa"]
+
+KNNdemo
+
+```
+
+> [TODO]{style="color:red;font-weight:bold"}: Climate Change *Similar to the democratic side, when it comes to data scientists working within the climate change actavism realm, it is important that they correcly identify what factors acutally contribute to lack of effecienct within cars. Priviously, we saw that horsepower and weight dont have as strong of an impact on fuel effeciency as we thought, but looking at the roc below, we can see that weight and cylinders do have a significant coorelation to fuel effeciency. Therefore it is important that data scienctist properly test all factors, weed out those without significant impact, and continue to explore all factors/combination of factors*
+
+```{r climate}
+Auto$emission <- ifelse(Auto$mpg <= 25, "high", "low")
+Auto$emission <- as.factor(Auto$emission)
+
+climateFit <- glm(emission ~ weight + cylinders, 
+                   data = Auto, 
+                   family = binomial)
+
+Auto$prob <- predict(climateFit, Auto, type = "response")
+roc <- roc(Auto$emission, Auto$prob, levels = c("low", "high"))
+
+
+plot(roc, col = "blue", main = "ROC Curve for Emission Prediction")
+auc(roc)
+```
